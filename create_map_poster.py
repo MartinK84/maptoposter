@@ -10,10 +10,12 @@ import json
 import os
 from datetime import datetime
 import argparse
+import pickle
 
 THEMES_DIR = "themes"
 FONTS_DIR = "fonts"
 POSTERS_DIR = "posters"
+CACHE_DIR = "cache"
 
 def load_fonts():
     """
@@ -213,8 +215,35 @@ def get_coordinates(city, country):
     else:
         raise ValueError(f"Could not find coordinates for {city}, {country}")
 
-def create_poster(city, country, point, dist, output_file):
-    print(f"\nGenerating map for {city}, {country}...")
+def get_map_data(city, country, point, dist):
+    """
+    Fetch map data from cache or download if not available.
+    Returns (G, water, parks).
+    """
+    # Ensure cache directory exists
+    if not os.path.exists(CACHE_DIR):
+        os.makedirs(CACHE_DIR)
+    
+    # Generate cache filename
+    city_slug = city.lower().replace(' ', '_')
+    country_slug = country.lower().replace(' ', '_')
+    cache_filename = f"{city_slug}_{country_slug}_{dist}.pkl"
+    cache_path = os.path.join(CACHE_DIR, cache_filename)
+    
+    # Check cache
+    if os.path.exists(cache_path):
+        print(f"✓ Found cached data: {cache_path}")
+        try:
+            with open(cache_path, 'rb') as f:
+                print("  Loading from cache...")
+                data = pickle.load(f)
+                print("✓ Data loaded from cache")
+                return data
+        except Exception as e:
+            print(f"⚠ Error loading cache: {e}. Downloading fresh data.")
+    
+    # Download if not cached
+    print("  Cache miss. Downloading fresh data...")
     
     # Progress bar for data fetching
     with tqdm(total=3, desc="Fetching map data", unit="step", bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt}') as pbar:
@@ -240,8 +269,22 @@ def create_poster(city, country, point, dist, output_file):
         except:
             parks = None
         pbar.update(1)
+        
+    # Save to cache
+    try:
+        with open(cache_path, 'wb') as f:
+            pickle.dump((G, water, parks), f)
+        print(f"✓ Data saved to cache: {cache_path}")
+    except Exception as e:
+        print(f"⚠ Could not save to cache: {e}")
+        
+    return G, water, parks
+
+def create_poster(city, country, point, dist, output_file):
+    print(f"\nGenerating map for {city}, {country}...")
     
-    print("✓ All data downloaded successfully!")
+    # Get data (cached or fresh)
+    G, water, parks = get_map_data(city, country, point, dist)
     
     # 2. Setup Plot
     print("Rendering map...")
