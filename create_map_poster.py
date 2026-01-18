@@ -12,7 +12,7 @@ from datetime import datetime
 import argparse
 import pickle
 import tkinter as tk
-from tkinter import ttk, messagebox, colorchooser
+from tkinter import ttk, messagebox, colorchooser, simpledialog
 from PIL import Image, ImageTk
 import threading
 import glob
@@ -505,6 +505,7 @@ class MapPosterApp:
         self.theme_combo['values'] = get_available_themes()
         self.theme_combo.pack(fill=tk.X, pady=(0, 10))
         self.theme_combo.bind('<<ComboboxSelected>>', self.on_theme_change)
+        ttk.Button(theme_group, text="Save Theme", command=self.save_theme).pack(fill=tk.X, pady=(0, 5))
         
         self.colors_frame = ttk.LabelFrame(left_panel, text="Adjust Colors", padding=10)
         self.colors_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
@@ -552,6 +553,39 @@ class MapPosterApp:
         global THEME
         THEME = self.current_theme_data
         self.refresh_color_buttons()
+
+    def save_theme(self):
+        current_name = self.theme_var.get()
+        new_name = simpledialog.askstring("Save Theme", "Enter theme name (will be converted to snake_case filename):", 
+                                        initialvalue=current_name, parent=self.root)
+        
+        if not new_name:
+            return
+            
+        # Create filename slug (snake_case)
+        slug = new_name.lower().replace(' ', '_')
+        slug = "".join([c for c in slug if c.isalnum() or c == '_'])
+        
+        if not slug:
+            messagebox.showerror("Error", "Invalid theme name")
+            return
+            
+        filename = f"{slug}.json"
+        filepath = os.path.join(THEMES_DIR, filename)
+        
+        if os.path.exists(filepath):
+            if not messagebox.askyesno("Confirm Overwrite", f"Theme '{slug}' already exists. Overwrite?"):
+                return
+        
+        self.current_theme_data['name'] = new_name
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(self.current_theme_data, f, indent=2)
+            messagebox.showinfo("Success", f"Theme saved as '{slug}'")
+            self.theme_combo['values'] = get_available_themes()
+            self.theme_var.set(slug)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save theme: {e}")
 
     def load_last_poster(self):
         if not os.path.exists(POSTERS_DIR): return
