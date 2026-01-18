@@ -6,6 +6,7 @@ import numpy as np
 from geopy.geocoders import Nominatim
 from tqdm import tqdm
 import time
+import math
 import json
 import os
 from datetime import datetime
@@ -203,7 +204,7 @@ def get_edge_widths_by_type(G):
     
     return edge_widths
 
-def get_coordinates(city, country):
+def get_coordinates(city, country, region=None):
     """
     Fetches coordinates for a given city and country using geopy.
     Includes rate limiting to be respectful to the geocoding service.
@@ -214,16 +215,50 @@ def get_coordinates(city, country):
     # Add a small delay to respect Nominatim's usage policy
     time.sleep(1)
     
-    location = geolocator.geocode(f"{city}, {country}")
+    if region:
+        query = f"{city}, {region}, {country}"
+        print(f"  Query: {query}")
+    else:
+        query = f"{city}, {country}"
+    
+    location = geolocator.geocode(query)
     
     if location:
         print(f"✓ Found: {location.address}")
         print(f"✓ Coordinates: {location.latitude}, {location.longitude}")
         return (location.latitude, location.longitude)
     else:
-        raise ValueError(f"Could not find coordinates for {city}, {country}")
+        raise ValueError(f"Could not find coordinates for {query}")
 
-def get_map_data(city, country, point, dist):
+def shift_point(point, shift_x, shift_y):
+    """
+    Shift a coordinate point by x (East) and y (North) meters.
+    """
+    lat, lon = point
+    R = 6378137  # Earth radius in meters
+    
+    d_lat = shift_y / R
+    d_lon = shift_x / (R * math.cos(math.pi * lat / 180))
+    
+    new_lat = lat + (d_lat * 180 / math.pi)
+    new_lon = lon + (d_lon * 180 / math.pi)
+    
+    return new_lat, new_lon
+
+def calculate_bounds(point, dist):
+    """
+    Calculate the lat/lon bounds for a square bounding box 
+    centered at point with radius dist (in meters).
+    """
+    lat, lon = point
+    R = 6378137  # Earth radius
+    
+    d_lat = dist / R * (180 / math.pi)
+    d_lon = dist / (R * math.cos(math.pi * lat / 180)) * (180 / math.pi)
+    
+    return (lon - d_lon, lon + d_lon), (lat - d_lat, lat + d_lat)
+
+def get_map_data(city, country, point, dist, shift_x=0, shift_y=0):
     """
     Fetch map data from cache or download if not available.
     Returns (G, water, parks).
@@ -235,9 +270,17 @@ def get_map_data(city, country, point, dist):
     # Generate cache filename
     city_slug = city.lower().replace(' ', '_')
     country_slug = country.lower().replace(' ', '_')
-    cache_filename = f"{city_slug}_{country_slug}_{dist}.pkl"
+    
+    # Include shift in filename to distinguish different map centers
+    cache_filename = f"{city_slug}_{country_slug}_{dist}_sx{int(shift_x)}_sy{int(shift_y)}.pkl"
     cache_path = os.path.join(CACHE_DIR, cache_filename)
     
+    # Check for legacy cache file (no shift) if shifts are 0
+    if shift_x == 0 and shift_y == 0 and not os.path.exists(cache_path):
+        legacy_path = os.path.join(CACHE_DIR, f"{city_slug}_{country_slug}_{dist}.pkl")
+        if os.path.exists(legacy_path):
+            cache_path = legacy_path
+
     # Check cache
     if os.path.exists(cache_path):
         print(f"✓ Found cached data: {cache_path}")
@@ -288,11 +331,16 @@ def get_map_data(city, country, point, dist):
         
     return G, water, parks
 
-def create_poster(city, country, point, dist, output_file):
+def create_poster(city, country, point, dist, output_file, shift_x=0, shift_y=0):
     print(f"\nGenerating map for {city}, {country}...")
     
+    if shift_x != 0 or shift_y != 0:
+        point = shift_point(point, shift_x, shift_y)
+        print(f"  Applying shift: X={shift_x}m, Y={shift_y}m")
+        print(f"  New center: {point[0]:.4f}, {point[1]:.4f}")
+
     # Get data (cached or fresh)
-    G, water, parks = get_map_data(city, country, point, dist)
+    G, water, parks = get_map_data(city, country, point, dist, shift_x, shift_y)
     
     # 2. Setup Plot
     print("Rendering map...")
@@ -322,6 +370,12 @@ def create_poster(city, country, point, dist, output_file):
         edge_linewidth=edge_widths,
         show=False, close=False
     )
+    
+    # Force the plot limits to match the requested area
+    # This prevents zooming in when data is sparse (e.g. at edges/coast)
+    xlim, ylim = calculate_bounds(point, dist)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
     
     # Layer 3: Gradients (Top and Bottom)
     if THEME.get('visible_gradient_color', True):
@@ -497,6 +551,10 @@ class MapPosterApp:
         self.city_var = tk.StringVar()
         ttk.Entry(input_group, textvariable=self.city_var).pack(fill=tk.X, pady=(0, 5))
         
+        ttk.Label(input_group, text="Region (Optional):").pack(anchor=tk.W)
+        self.region_var = tk.StringVar()
+        ttk.Entry(input_group, textvariable=self.region_var).pack(fill=tk.X, pady=(0, 5))
+        
         ttk.Label(input_group, text="Country:").pack(anchor=tk.W)
         self.country_var = tk.StringVar()
         ttk.Entry(input_group, textvariable=self.country_var).pack(fill=tk.X, pady=(0, 5))
@@ -505,6 +563,15 @@ class MapPosterApp:
         self.dist_var = tk.IntVar(value=29000)
         ttk.Entry(input_group, textvariable=self.dist_var).pack(fill=tk.X, pady=(0, 5))
         
+        shift_frame = ttk.Frame(input_group)
+        shift_frame.pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(shift_frame, text="Shift X (m):").pack(side=tk.LEFT)
+        self.shift_x_var = tk.IntVar(value=0)
+        ttk.Entry(shift_frame, textvariable=self.shift_x_var, width=8).pack(side=tk.LEFT, padx=(5, 10))
+        ttk.Label(shift_frame, text="Shift Y (m):").pack(side=tk.LEFT)
+        self.shift_y_var = tk.IntVar(value=0)
+        ttk.Entry(shift_frame, textvariable=self.shift_y_var, width=8).pack(side=tk.LEFT, padx=(5, 0))
+
         theme_group = ttk.LabelFrame(left_panel, text="Theme", padding=10)
         theme_group.pack(fill=tk.X, pady=(0, 10))
         
@@ -634,23 +701,26 @@ class MapPosterApp:
     def generate_map(self):
         city = self.city_var.get()
         country = self.country_var.get()
+        region = self.region_var.get().strip() or None
         try: dist = self.dist_var.get()
         except: return messagebox.showerror("Error", "Invalid distance")
+        try: sx, sy = self.shift_x_var.get(), self.shift_y_var.get()
+        except: return messagebox.showerror("Error", "Invalid shift values")
         
         if not city or not country:
             return messagebox.showerror("Error", "City and Country required")
             
         self.gen_btn.state(['disabled'])
         self.status_label.config(text="Generating... Check console for progress.")
-        threading.Thread(target=self.run_generation, args=(city, country, dist)).start()
+        threading.Thread(target=self.run_generation, args=(city, country, dist, region, sx, sy)).start()
 
-    def run_generation(self, city, country, dist):
+    def run_generation(self, city, country, dist, region=None, shift_x=0, shift_y=0):
         try:
             global THEME
             THEME = self.current_theme_data
-            coords = get_coordinates(city, country)
+            coords = get_coordinates(city, country, region)
             output_file = generate_output_filename(city, self.theme_var.get())
-            create_poster(city, country, coords, dist, output_file)
+            create_poster(city, country, coords, dist, output_file, shift_x, shift_y)
             self.root.after(0, lambda: self.on_success(output_file))
         except Exception as e:
             self.root.after(0, lambda: self.on_error(str(e)))
@@ -685,8 +755,11 @@ Examples:
     
     parser.add_argument('--city', '-c', type=str, help='City name')
     parser.add_argument('--country', '-C', type=str, help='Country name')
+    parser.add_argument('--region', '-r', type=str, help='Region/State for specific search')
     parser.add_argument('--theme', '-t', type=str, default='feature_based', help='Theme name (default: feature_based)')
     parser.add_argument('--distance', '-d', type=int, default=29000, help='Map radius in meters (default: 29000)')
+    parser.add_argument('--shift-x', type=int, default=0, help='Shift map center East in meters (negative for West)')
+    parser.add_argument('--shift-y', type=int, default=0, help='Shift map center North in meters (negative for South)')
     parser.add_argument('--list-themes', action='store_true', help='List all available themes')
     parser.add_argument('--gui', '-g', action='store_true', help='Launch Graphical User Interface')
     
@@ -729,9 +802,9 @@ Examples:
     
     # Get coordinates and generate poster
     try:
-        coords = get_coordinates(args.city, args.country)
+        coords = get_coordinates(args.city, args.country, args.region)
         output_file = generate_output_filename(args.city, args.theme)
-        create_poster(args.city, args.country, coords, args.distance, output_file)
+        create_poster(args.city, args.country, coords, args.distance, output_file, args.shift_x, args.shift_y)
         
         print("\n" + "=" * 50)
         print("✓ Poster generation complete!")
