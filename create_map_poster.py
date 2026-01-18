@@ -153,19 +153,22 @@ def get_edge_colors_by_type(G):
         if isinstance(highway, list):
             highway = highway[0] if highway else 'unclassified'
         
-        # Assign color based on road type
+        # Determine theme key based on road type
         if highway in ['motorway', 'motorway_link']:
-            color = THEME['road_motorway']
+            key = 'road_motorway'
         elif highway in ['trunk', 'trunk_link', 'primary', 'primary_link']:
-            color = THEME['road_primary']
+            key = 'road_primary'
         elif highway in ['secondary', 'secondary_link']:
-            color = THEME['road_secondary']
+            key = 'road_secondary'
         elif highway in ['tertiary', 'tertiary_link']:
-            color = THEME['road_tertiary']
+            key = 'road_tertiary'
         elif highway in ['residential', 'living_street', 'unclassified']:
-            color = THEME['road_residential']
+            key = 'road_residential'
         else:
-            color = THEME['road_default']
+            key = 'road_default'
+        
+        # Check visibility and assign color
+        color = THEME[key] if THEME.get(f'visible_{key}', True) else 'none'
         
         edge_colors.append(color)
     
@@ -293,16 +296,19 @@ def create_poster(city, country, point, dist, output_file):
     
     # 2. Setup Plot
     print("Rendering map...")
-    fig, ax = plt.subplots(figsize=(12, 16), facecolor=THEME['bg'])
-    ax.set_facecolor(THEME['bg'])
+    bg_color = THEME['bg'] if THEME.get('visible_bg', True) else 'none'
+    fig, ax = plt.subplots(figsize=(12, 16), facecolor=bg_color)
+    ax.set_facecolor(bg_color)
     ax.set_position([0, 0, 1, 1])
     
     # 3. Plot Layers
     # Layer 1: Polygons
     if water is not None and not water.empty:
-        water.plot(ax=ax, facecolor=THEME['water'], edgecolor='none', zorder=1)
+        if THEME.get('visible_water', True):
+            water.plot(ax=ax, facecolor=THEME['water'], edgecolor='none', zorder=1)
     if parks is not None and not parks.empty:
-        parks.plot(ax=ax, facecolor=THEME['parks'], edgecolor='none', zorder=2)
+        if THEME.get('visible_parks', True):
+            parks.plot(ax=ax, facecolor=THEME['parks'], edgecolor='none', zorder=2)
     
     # Layer 2: Roads with hierarchy coloring
     print("Applying road hierarchy colors...")
@@ -310,7 +316,7 @@ def create_poster(city, country, point, dist, output_file):
     edge_widths = get_edge_widths_by_type(G)
     
     ox.plot_graph(
-        G, ax=ax, bgcolor=THEME['bg'],
+        G, ax=ax, bgcolor=bg_color,
         node_size=0,
         edge_color=edge_colors,
         edge_linewidth=edge_widths,
@@ -318,8 +324,9 @@ def create_poster(city, country, point, dist, output_file):
     )
     
     # Layer 3: Gradients (Top and Bottom)
-    create_gradient_fade(ax, THEME['gradient_color'], location='bottom', zorder=10)
-    create_gradient_fade(ax, THEME['gradient_color'], location='top', zorder=10)
+    if THEME.get('visible_gradient_color', True):
+        create_gradient_fade(ax, THEME['gradient_color'], location='bottom', zorder=10)
+        create_gradient_fade(ax, THEME['gradient_color'], location='top', zorder=10)
     
     # 4. Typography using Roboto font
     if FONTS:
@@ -336,23 +343,24 @@ def create_poster(city, country, point, dist, output_file):
     
     spaced_city = "  ".join(list(city.upper()))
 
-    # --- BOTTOM TEXT ---
-    ax.text(0.5, 0.14, spaced_city, transform=ax.transAxes,
-            color=THEME['text'], ha='center', fontproperties=font_main, zorder=11)
-    
-    ax.text(0.5, 0.10, country.upper(), transform=ax.transAxes,
-            color=THEME['text'], ha='center', fontproperties=font_sub, zorder=11)
-    
-    lat, lon = point
-    coords = f"{lat:.4f}° N / {lon:.4f}° E" if lat >= 0 else f"{abs(lat):.4f}° S / {lon:.4f}° E"
-    if lon < 0:
-        coords = coords.replace("E", "W")
-    
-    ax.text(0.5, 0.07, coords, transform=ax.transAxes,
-            color=THEME['text'], alpha=0.7, ha='center', fontproperties=font_coords, zorder=11)
-    
-    ax.plot([0.4, 0.6], [0.125, 0.125], transform=ax.transAxes, 
-            color=THEME['text'], linewidth=1, zorder=11)
+    if THEME.get('visible_text', True):
+        # --- BOTTOM TEXT ---
+        ax.text(0.5, 0.14, spaced_city, transform=ax.transAxes,
+                color=THEME['text'], ha='center', fontproperties=font_main, zorder=11)
+        
+        ax.text(0.5, 0.10, country.upper(), transform=ax.transAxes,
+                color=THEME['text'], ha='center', fontproperties=font_sub, zorder=11)
+        
+        lat, lon = point
+        coords = f"{lat:.4f}° N / {lon:.4f}° E" if lat >= 0 else f"{abs(lat):.4f}° S / {lon:.4f}° E"
+        if lon < 0:
+            coords = coords.replace("E", "W")
+        
+        ax.text(0.5, 0.07, coords, transform=ax.transAxes,
+                color=THEME['text'], alpha=0.7, ha='center', fontproperties=font_coords, zorder=11)
+        
+        ax.plot([0.4, 0.6], [0.125, 0.125], transform=ax.transAxes, 
+                color=THEME['text'], linewidth=1, zorder=11)
 
     # --- ATTRIBUTION (bottom right) ---
     if FONTS:
@@ -360,9 +368,10 @@ def create_poster(city, country, point, dist, output_file):
     else:
         font_attr = FontProperties(family='monospace', size=8)
     
-    ax.text(0.98, 0.02, "© OpenStreetMap contributors", transform=ax.transAxes,
-            color=THEME['text'], alpha=0.5, ha='right', va='bottom', 
-            fontproperties=font_attr, zorder=11)
+    if THEME.get('visible_text', True):
+        ax.text(0.98, 0.02, "© OpenStreetMap contributors", transform=ax.transAxes,
+                color=THEME['text'], alpha=0.5, ha='right', va='bottom', 
+                fontproperties=font_attr, zorder=11)
 
     # 5. Save
     print(f"Saving to {output_file}...")
@@ -532,12 +541,25 @@ class MapPosterApp:
                      and isinstance(self.current_theme_data[k], str) 
                      and self.current_theme_data[k].startswith('#')]
         
+        self.vars = {}
         for i, key in enumerate(sorted(color_keys)):
             lbl = ttk.Label(self.color_container, text=key.replace('road_', ''))
             lbl.grid(row=i, column=0, sticky=tk.W, padx=2, pady=2)
             btn = tk.Button(self.color_container, bg=self.current_theme_data[key], width=4,
                            command=lambda k=key: self.pick_color(k))
             btn.grid(row=i, column=1, sticky=tk.E, padx=2, pady=2)
+            
+            # Checkbox for visibility
+            var = tk.BooleanVar(value=self.current_theme_data.get(f'visible_{key}', True))
+            self.vars[key] = var
+            chk = ttk.Checkbutton(self.color_container, variable=var,
+                                  command=lambda k=key: self.toggle_visibility(k))
+            chk.grid(row=i, column=2, padx=5, pady=2)
+
+    def toggle_visibility(self, key):
+        self.current_theme_data[f'visible_{key}'] = self.vars[key].get()
+        global THEME
+        THEME = self.current_theme_data
 
     def pick_color(self, key):
         curr = self.current_theme_data.get(key, '#FFFFFF')
