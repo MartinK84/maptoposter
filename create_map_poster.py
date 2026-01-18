@@ -11,6 +11,11 @@ import os
 from datetime import datetime
 import argparse
 import pickle
+import tkinter as tk
+from tkinter import ttk, messagebox, colorchooser
+from PIL import Image, ImageTk
+import threading
+import glob
 
 THEMES_DIR = "themes"
 FONTS_DIR = "fonts"
@@ -446,6 +451,169 @@ def list_themes():
             print(f"    {description}")
         print()
 
+class MapPosterApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("City Map Poster Generator")
+        self.root.geometry("1200x800")
+        
+        # Use Agg backend to avoid thread issues with matplotlib
+        plt.switch_backend('Agg')
+        
+        self.current_theme_data = load_theme("feature_based")
+        global THEME
+        THEME = self.current_theme_data
+        
+        self.setup_ui()
+        # Defer loading image to ensure widgets are sized
+        self.root.after(100, self.load_last_poster)
+
+    def setup_ui(self):
+        main_frame = ttk.Frame(self.root)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Left Panel - Controls
+        left_panel = ttk.Frame(main_frame, width=350)
+        left_panel.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 10))
+        
+        # Right Panel - Preview
+        self.right_panel = ttk.Frame(main_frame)
+        self.right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        
+        # Controls
+        input_group = ttk.LabelFrame(left_panel, text="Map Settings", padding=10)
+        input_group.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(input_group, text="City:").pack(anchor=tk.W)
+        self.city_var = tk.StringVar()
+        ttk.Entry(input_group, textvariable=self.city_var).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(input_group, text="Country:").pack(anchor=tk.W)
+        self.country_var = tk.StringVar()
+        ttk.Entry(input_group, textvariable=self.country_var).pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Label(input_group, text="Radius (m):").pack(anchor=tk.W)
+        self.dist_var = tk.IntVar(value=29000)
+        ttk.Entry(input_group, textvariable=self.dist_var).pack(fill=tk.X, pady=(0, 5))
+        
+        theme_group = ttk.LabelFrame(left_panel, text="Theme", padding=10)
+        theme_group.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(theme_group, text="Template:").pack(anchor=tk.W)
+        self.theme_var = tk.StringVar(value="feature_based")
+        self.theme_combo = ttk.Combobox(theme_group, textvariable=self.theme_var)
+        self.theme_combo['values'] = get_available_themes()
+        self.theme_combo.pack(fill=tk.X, pady=(0, 10))
+        self.theme_combo.bind('<<ComboboxSelected>>', self.on_theme_change)
+        
+        self.colors_frame = ttk.LabelFrame(left_panel, text="Adjust Colors", padding=10)
+        self.colors_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        self.color_container = ttk.Frame(self.colors_frame)
+        self.color_container.pack(fill=tk.BOTH, expand=True)
+        self.refresh_color_buttons()
+        
+        self.gen_btn = ttk.Button(left_panel, text="Generate Poster", command=self.generate_map)
+        self.gen_btn.pack(fill=tk.X, ipady=10, pady=(0, 10))
+        
+        self.status_label = ttk.Label(left_panel, text="Ready", wraplength=300)
+        self.status_label.pack(fill=tk.X)
+        
+        self.preview_label = ttk.Label(self.right_panel, text="No poster generated yet", anchor=tk.CENTER)
+        self.preview_label.pack(fill=tk.BOTH, expand=True)
+
+    def refresh_color_buttons(self):
+        for widget in self.color_container.winfo_children():
+            widget.destroy()
+        
+        color_keys = [k for k in self.current_theme_data.keys() 
+                     if k.startswith(('bg', 'text', 'water', 'parks', 'road', 'gradient')) 
+                     and isinstance(self.current_theme_data[k], str) 
+                     and self.current_theme_data[k].startswith('#')]
+        
+        for i, key in enumerate(sorted(color_keys)):
+            lbl = ttk.Label(self.color_container, text=key.replace('road_', ''))
+            lbl.grid(row=i, column=0, sticky=tk.W, padx=2, pady=2)
+            btn = tk.Button(self.color_container, bg=self.current_theme_data[key], width=4,
+                           command=lambda k=key: self.pick_color(k))
+            btn.grid(row=i, column=1, sticky=tk.E, padx=2, pady=2)
+
+    def pick_color(self, key):
+        curr = self.current_theme_data.get(key, '#FFFFFF')
+        color = colorchooser.askcolor(color=curr, title=f"Choose {key}")
+        if color[1]:
+            self.current_theme_data[key] = color[1]
+            self.refresh_color_buttons()
+            global THEME
+            THEME = self.current_theme_data
+
+    def on_theme_change(self, event):
+        self.current_theme_data = load_theme(self.theme_var.get())
+        global THEME
+        THEME = self.current_theme_data
+        self.refresh_color_buttons()
+
+    def load_last_poster(self):
+        if not os.path.exists(POSTERS_DIR): return
+        files = glob.glob(os.path.join(POSTERS_DIR, "*.png"))
+        if files:
+            self.show_image(max(files, key=os.path.getctime))
+
+    def show_image(self, path):
+        try:
+            img = Image.open(path)
+            w_avail = self.preview_label.winfo_width() or 800
+            h_avail = self.preview_label.winfo_height() or 800
+            
+            ratio = min(w_avail/img.width, h_avail/img.height)
+            new_size = (int(img.width*ratio), int(img.height*ratio))
+            
+            resample = getattr(Image, 'Resampling', Image).LANCZOS
+            img = img.resize(new_size, resample)
+            self.photo = ImageTk.PhotoImage(img)
+            self.preview_label.configure(image=self.photo, text="")
+        except Exception as e:
+            print(f"Error showing image: {e}")
+
+    def generate_map(self):
+        city = self.city_var.get()
+        country = self.country_var.get()
+        try: dist = self.dist_var.get()
+        except: return messagebox.showerror("Error", "Invalid distance")
+        
+        if not city or not country:
+            return messagebox.showerror("Error", "City and Country required")
+            
+        self.gen_btn.state(['disabled'])
+        self.status_label.config(text="Generating... Check console for progress.")
+        threading.Thread(target=self.run_generation, args=(city, country, dist)).start()
+
+    def run_generation(self, city, country, dist):
+        try:
+            global THEME
+            THEME = self.current_theme_data
+            coords = get_coordinates(city, country)
+            output_file = generate_output_filename(city, self.theme_var.get())
+            create_poster(city, country, coords, dist, output_file)
+            self.root.after(0, lambda: self.on_success(output_file))
+        except Exception as e:
+            self.root.after(0, lambda: self.on_error(str(e)))
+
+    def on_success(self, output_file):
+        self.status_label.config(text=f"Saved: {os.path.basename(output_file)}")
+        self.show_image(output_file)
+        self.gen_btn.state(['!disabled'])
+
+    def on_error(self, msg):
+        self.status_label.config(text=f"Error: {msg}")
+        messagebox.showerror("Error", msg)
+        self.gen_btn.state(['!disabled'])
+
+def start_gui():
+    root = tk.Tk()
+    app = MapPosterApp(root)
+    root.mainloop()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Generate beautiful map posters for any city",
@@ -464,9 +632,15 @@ Examples:
     parser.add_argument('--theme', '-t', type=str, default='feature_based', help='Theme name (default: feature_based)')
     parser.add_argument('--distance', '-d', type=int, default=29000, help='Map radius in meters (default: 29000)')
     parser.add_argument('--list-themes', action='store_true', help='List all available themes')
+    parser.add_argument('--gui', '-g', action='store_true', help='Launch Graphical User Interface')
     
     args = parser.parse_args()
     
+    # Launch GUI if requested
+    if args.gui:
+        start_gui()
+        os.sys.exit(0)
+
     # If no arguments provided, show examples
     if len(os.sys.argv) == 1:
         print_examples()
